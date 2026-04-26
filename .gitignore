@@ -1,0 +1,11 @@
+# Environnements virtuels
+.venv/
+
+# Fichiers Python compilés
+__pycache__/
+**/__pycache__/
+*.pyc
+
+# Datasets
+dataset/
+

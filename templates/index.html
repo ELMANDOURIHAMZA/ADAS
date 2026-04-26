@@ -1,0 +1,945 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ADAS — Détection Temps Réel</title>
+<link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=JetBrains+Mono:wght@400;500&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+/* ═══════════════════ DESIGN TOKENS ═══════════════════ */
+:root {
+  --bg:     #07090f;
+  --bg1:    #0b0f1a;
+  --bg2:    #0f1522;
+  --surf:   #131b2e;
+  --bord:   #1a2840;
+  --bord2:  #1f3050;
+  --cyan:   #00d4ff;
+  --cyan2:  #0090cc;
+  --green:  #00e87a;
+  --orange: #ff8c00;
+  --red:    #ff1e3c;
+  --yellow: #ffd600;
+  --txt:    #dde8f5;
+  --txt2:   #6a80a0;
+  --txt3:   #2e4060;
+  --hud:    'Rajdhani', sans-serif;
+  --mono:   'JetBrains Mono', monospace;
+  --ui:     'Inter', sans-serif;
+}
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { scroll-behavior: smooth; }
+body {
+  background: var(--bg); color: var(--txt);
+  font-family: var(--ui); min-height: 100vh; overflow-x: hidden;
+}
+/* scanlines */
+body::after {
+  content: ''; position: fixed; inset: 0; pointer-events: none; z-index: 0;
+  background: repeating-linear-gradient(0deg,
+    transparent, transparent 3px,
+    rgba(0,212,255,.018) 3px, rgba(0,212,255,.018) 4px);
+}
+
+/* ═══ HEADER ═══ */
+header {
+  position: sticky; top: 0; z-index: 300;
+  background: rgba(7,9,15,.96); backdrop-filter: blur(24px);
+  border-bottom: 1px solid var(--bord);
+  height: 54px; padding: 0 20px;
+  display: flex; align-items: center; justify-content: space-between;
+}
+.logo { display: flex; align-items: center; gap: 11px; }
+.logo-badge {
+  width: 32px; height: 32px;
+  background: linear-gradient(135deg, var(--cyan2), var(--cyan));
+  clip-path: polygon(50% 0%,100% 25%,100% 75%,50% 100%,0% 75%,0% 25%);
+  display: flex; align-items: center; justify-content: center;
+  font-family: var(--mono); font-size: .48rem; font-weight: 700; color: #000;
+}
+.logo-text { font-family: var(--hud); font-size: 1.3rem; font-weight: 700; letter-spacing: 4px; }
+.logo-text span { color: var(--cyan); }
+.logo-sub { font-size: .48rem; font-family: var(--mono); color: var(--txt3); letter-spacing: 2px; margin-top: 1px; }
+.hpill {
+  display: flex; align-items: center; gap: 6px; padding: 4px 12px;
+  border: 1px solid var(--bord2); border-radius: 20px;
+  background: var(--bg2); font-family: var(--mono); font-size: .6rem; color: var(--txt3);
+}
+.hpill .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 7px var(--green); animation: blink 2s ease infinite; }
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:.25} }
+
+/* ═══ LAYOUT ═══ */
+.layout {
+  position: relative; z-index: 1;
+  max-width: 1600px; margin: 0 auto;
+  padding: 1rem 1rem 3rem;
+  display: grid;
+  grid-template-columns: 290px 1fr 265px;
+  gap: 10px; align-items: start;
+}
+
+/* ═══ CARD ═══ */
+.card {
+  background: var(--surf); border: 1px solid var(--bord);
+  border-radius: 8px; overflow: hidden; position: relative;
+}
+.card::before {
+  content: ''; position: absolute; top: 0; left: 0; right: 0; height: 1px;
+  background: linear-gradient(90deg, transparent, var(--cyan) 40%, var(--cyan2) 60%, transparent);
+  opacity: .5;
+}
+.ch {
+  padding: 9px 14px; border-bottom: 1px solid var(--bord);
+  background: var(--bg2); display: flex; align-items: center; gap: 7px;
+}
+.ch h2 { font-family: var(--hud); font-size: .68rem; font-weight: 600; letter-spacing: 2.5px; color: var(--txt2); }
+.cb { padding: 13px; }
+
+/* ═══ LEFT COLUMN ═══ */
+#col-left { display: flex; flex-direction: column; gap: 10px; }
+
+/* Drop zone */
+.drop {
+  border: 2px dashed var(--bord2); border-radius: 7px;
+  padding: 22px 12px; text-align: center; cursor: pointer;
+  background: var(--bg1); position: relative; transition: all .2s;
+}
+.drop:hover, .drop.drag { border-color: var(--cyan); background: rgba(0,212,255,.04); }
+.drop input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.drop-ico { font-size: 2rem; margin-bottom: 8px; }
+.drop-lbl { font-size: .78rem; color: var(--txt2); }
+.drop-lbl strong { color: var(--cyan); }
+.drop-fmt { font-size: .6rem; color: var(--txt3); font-family: var(--mono); margin-top: 5px; }
+
+/* File info */
+.finfo {
+  display: none; background: var(--bg2); border: 1px solid var(--bord);
+  border-radius: 6px; padding: 9px 11px;
+}
+.fname { font-family: var(--mono); font-size: .7rem; color: var(--cyan); font-weight: 600; word-break: break-all; }
+.fmeta { font-size: .62rem; color: var(--txt3); font-family: var(--mono); margin-top: 3px; }
+
+/* Sliders */
+.slrow { display: flex; flex-direction: column; gap: 5px; }
+.sllbl { display: flex; justify-content: space-between; font-size: .7rem; color: var(--txt2); }
+.sllbl span { color: var(--cyan); font-family: var(--mono); }
+input[type=range] {
+  width: 100%; appearance: none; height: 4px; border-radius: 2px; cursor: pointer;
+  background: linear-gradient(90deg, var(--cyan) 0%, var(--cyan) var(--pct,25%), var(--bord2) var(--pct,25%), var(--bord2) 100%);
+}
+input[type=range]::-webkit-slider-thumb {
+  appearance: none; width: 14px; height: 14px; border-radius: 50%;
+  background: var(--cyan); box-shadow: 0 0 8px var(--cyan);
+}
+.sl-hint { font-size: .58rem; color: var(--txt3); font-family: var(--mono); }
+
+/* Analyze button */
+#abtn {
+  width: 100%; padding: 11px; border: none; border-radius: 7px;
+  background: linear-gradient(135deg, var(--cyan2), var(--cyan));
+  color: #000; font-family: var(--hud); font-size: 1rem; font-weight: 700;
+  letter-spacing: 2px; cursor: pointer; display: flex; align-items: center;
+  justify-content: center; gap: 8px; transition: opacity .2s, transform .1s;
+}
+#abtn:hover:not(:disabled) { opacity: .85; transform: translateY(-1px); }
+#abtn:disabled { opacity: .35; cursor: not-allowed; transform: none; }
+#rbtn {
+  width: 100%; padding: 7px; border-radius: 7px;
+  border: 1px solid var(--bord2); background: transparent;
+  color: var(--txt2); font-size: .7rem; cursor: pointer; display: none;
+  transition: border-color .2s, color .2s;
+}
+#rbtn:hover { border-color: var(--cyan); color: var(--cyan); }
+
+/* Stats grid */
+.sgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+.sbox {
+  background: var(--bg2); border: 1px solid var(--bord);
+  border-radius: 6px; padding: 9px 10px; text-align: center;
+}
+.sval { font-family: var(--hud); font-size: 1.3rem; font-weight: 700; color: var(--cyan); line-height: 1; }
+.sval.g { color: var(--green); }
+.sval.o { color: var(--orange); }
+.sval.r { color: var(--red); }
+.skey { font-size: .56rem; color: var(--txt3); font-family: var(--mono); margin-top: 3px; }
+
+/* ADAS strip */
+.astrip {
+  border-radius: 6px; padding: 9px 12px;
+  font-family: var(--hud); font-size: .78rem; font-weight: 600; letter-spacing: 1px;
+  display: none;
+}
+.s-ok       { background: rgba(0,232,122,.09); color: var(--green);  border: 1px solid rgba(0,232,122,.22); }
+.s-warning  { background: rgba(255,140,0,.1);  color: var(--orange); border: 1px solid rgba(255,140,0,.28); }
+.s-overspeed,.s-danger {
+  background: rgba(255,30,60,.13); color: var(--red);
+  border: 1px solid rgba(255,30,60,.35);
+  animation: pbrd .6s ease infinite;
+}
+@keyframes pbrd { 0%,100%{box-shadow:0 0 0 0 rgba(255,30,60,.5)} 50%{box-shadow:0 0 0 5px transparent} }
+
+/* Legend */
+.lgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 3px; padding: 10px; max-height: 210px; overflow-y: auto; }
+.litem { display: flex; align-items: center; gap: 5px; padding: 4px 6px; background: var(--bg2); border-radius: 3px; font-size: .6rem; color: var(--txt2); }
+.ldot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+
+/* ═══ CENTER COLUMN ═══ */
+#col-mid { display: flex; flex-direction: column; gap: 10px; }
+
+/* Video wrapper */
+.vwrap {
+  position: relative; background: #000;
+  border-radius: 8px; overflow: hidden;
+  border: 1px solid var(--bord); min-height: 200px;
+}
+#placeholder {
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  height: 340px; gap: 10px; color: var(--txt3);
+}
+#placeholder .big { font-size: 2.8rem; }
+#placeholder p { font-size: .75rem; text-align: center; line-height: 1.6; }
+#placeholder small { font-size: .62rem; color: var(--txt3); }
+
+/* Loading overlay */
+#loading {
+  display: none; position: absolute; inset: 0;
+  background: rgba(7,9,15,.92); z-index: 20;
+  flex-direction: column; align-items: center; justify-content: center; gap: 12px;
+}
+.spinner {
+  width: 44px; height: 44px; border-radius: 50%;
+  border: 3px solid var(--bord2); border-top-color: var(--cyan);
+  animation: spin .8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.load-lbl { font-family: var(--mono); font-size: .68rem; color: var(--txt2); }
+
+#main-video {
+  display: none; width: 100%; height: auto;
+  max-height: 530px; object-fit: contain; background: #000;
+}
+#main-img {
+  display: none; width: 100%; height: auto;
+  max-height: 530px; object-fit: contain;
+}
+#canvas {
+  position: absolute; top: 0; left: 0;
+  width: 100%; height: 100%; pointer-events: none;
+}
+.vbadge {
+  position: absolute; top: 10px; right: 10px; z-index: 10;
+  background: rgba(0,0,0,.8); border: 1px solid var(--bord2);
+  border-radius: 20px; padding: 3px 10px;
+  font-family: var(--mono); font-size: .58rem; color: var(--txt2);
+  display: none;
+}
+
+/* Progress bar */
+#pbar { display: none; background: var(--bg2); border-top: 1px solid var(--bord); padding: 7px 13px; }
+.ptrack { background: var(--bg1); border-radius: 2px; height: 3px; overflow: hidden; }
+.pfill { background: linear-gradient(90deg,var(--cyan2),var(--cyan)); height: 100%; width: 0%; transition: width .3s; }
+.pinfo { display: flex; justify-content: space-between; font-family: var(--mono); font-size: .57rem; color: var(--txt3); margin-top: 4px; }
+
+/* Speed chart */
+#chart-card { display: none; }
+.chart-inner { padding: 0 13px 12px; }
+canvas#spd-chart { width: 100% !important; height: 70px !important; }
+
+/* ═══ RIGHT COLUMN ═══ */
+#col-right { display: flex; flex-direction: column; gap: 10px; }
+
+/* Active detections */
+#det-list { display: flex; flex-direction: column; gap: 5px; padding: 10px; min-height: 60px; }
+.dcard {
+  display: flex; align-items: center; gap: 9px;
+  background: var(--bg2); border: 1px solid var(--bord);
+  border-radius: 5px; padding: 9px 11px; animation: fi .2s ease;
+}
+@keyframes fi { from{opacity:0;transform:translateY(-5px)} to{opacity:1;transform:translateY(0)} }
+.dcard.critical { border-left: 3px solid var(--red); }
+.dcard.warning  { border-left: 3px solid var(--orange); }
+.dcard.safe     { border-left: 3px solid var(--green); }
+.dcard.info     { border-left: 3px solid var(--cyan); }
+.d-ico  { font-size: 1.2rem; width: 22px; text-align: center; }
+.d-body { flex: 1; }
+.d-lbl  { font-size: .76rem; font-weight: 600; color: var(--txt); line-height: 1.2; }
+.d-conf { font-family: var(--mono); font-size: .6rem; color: var(--txt3); margin-top: 2px; }
+.d-pct  { font-family: var(--mono); font-size: .62rem; padding: 2px 8px; border-radius: 10px; }
+.p-critical { background:rgba(255,30,60,.18);  color: var(--red);    }
+.p-warning  { background:rgba(255,140,0,.18);  color: var(--orange); }
+.p-safe     { background:rgba(0,232,122,.15);  color: var(--green);  }
+.p-info     { background:rgba(0,212,255,.12);  color: var(--cyan);   }
+
+/* Feed */
+#feed { max-height: 280px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; padding: 10px; scrollbar-width: thin; scrollbar-color: var(--bord2) transparent; }
+.fitem { display: flex; align-items: center; gap: 8px; background: var(--bg2); border: 1px solid var(--bord); border-radius: 4px; padding: 6px 9px; font-size: .68rem; animation: fi .2s ease; }
+.ft  { font-family: var(--mono); font-size: .57rem; color: var(--txt3); min-width: 36px; }
+.fic { font-size: .9rem; }
+.fl  { flex: 1; color: var(--txt); }
+.fb  { font-family: var(--mono); font-size: .56rem; padding: 2px 6px; border-radius: 8px; }
+
+/* Summary */
+.srow { display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid var(--bord); font-size: .72rem; }
+.srow:last-child { border: none; }
+.sk { color: var(--txt3); }
+.sv-sum { font-family: var(--mono); color: var(--cyan); }
+
+.empty { padding: 18px; text-align: center; color: var(--txt3); font-size: .7rem; }
+.tag { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 10px; font-size: .58rem; font-family: var(--mono); background: rgba(0,212,255,.1); color: var(--cyan); border: 1px solid rgba(0,212,255,.2); }
+</style>
+</head>
+<body>
+
+<!-- HEADER -->
+<header>
+  <div class="logo">
+    <div class="logo-badge">AD<br>AS</div>
+    <div>
+      <div class="logo-text">AD<span>AS</span></div>
+      <div class="logo-sub">DÉTECTION EN TEMPS RÉEL · v3</div>
+    </div>
+  </div>
+  <div style="display:flex;align-items:center;gap:14px">
+    <div class="hpill"><div class="dot"></div><span>MODÈLE ACTIF</span></div>
+    <span id="clock" style="font-family:var(--mono);font-size:.62rem;color:var(--txt3)"></span>
+  </div>
+</header>
+
+<div class="layout">
+
+<!-- ═══ LEFT ═══ -->
+<div id="col-left">
+
+  <div class="card">
+    <div class="ch"><span>📁</span><h2>SOURCE</h2></div>
+    <div class="cb" style="display:flex;flex-direction:column;gap:11px">
+
+      <div class="drop" id="drop">
+        <input type="file" id="finput" accept="video/*,image/*">
+        <div class="drop-ico" id="dico">🎬</div>
+        <div class="drop-lbl">Glissez un fichier ou <strong onclick="document.getElementById('finput').click()">parcourir</strong></div>
+        <div class="drop-fmt">MP4 · AVI · MOV · MKV · JPG · PNG</div>
+      </div>
+
+      <div class="finfo" id="finfo">
+        <div class="fname" id="fname">—</div>
+        <div class="fmeta" id="fmeta">—</div>
+      </div>
+
+      <div class="slrow">
+        <div class="sllbl">Confiance min. <span id="confval">25%</span></div>
+        <input type="range" id="conf" min="5" max="95" value="25" oninput="sl(this,'confval','%')">
+      </div>
+
+      <div class="slrow">
+        <div class="sllbl">Analyser 1 frame / <span id="skipval">1</span></div>
+        <input type="range" id="skip" min="1" max="4" value="1" oninput="slSkip(this)">
+        <div class="sl-hint">1 = toutes les frames (précis, lent)</div>
+      </div>
+
+      <button id="abtn" onclick="analyze()" disabled><span>▶</span> Analyser</button>
+      <button id="rbtn" onclick="resetAll()">↺ Nouvelle analyse</button>
+
+    </div>
+  </div>
+
+  <!-- Stats -->
+  <div class="card" id="stats-card" style="display:none">
+    <div class="ch"><span>📊</span><h2>TÉLÉMÉTRIE</h2></div>
+    <div class="cb" style="display:flex;flex-direction:column;gap:9px">
+      <div class="sgrid">
+        <div class="sbox"><div class="sval" id="sv-spd">0</div><div class="skey">KM/H</div></div>
+        <div class="sbox"><div class="sval" id="sv-dist">—</div><div class="skey">DIST (m)</div></div>
+        <div class="sbox"><div class="sval" id="sv-lim">—</div><div class="skey">LIMITE</div></div>
+        <div class="sbox"><div class="sval" id="sv-n">0</div><div class="skey">DÉTECTIONS</div></div>
+      </div>
+      <div class="astrip" id="astrip"><span id="amsg">—</span></div>
+    </div>
+  </div>
+
+  <!-- Legend -->
+  <div class="card">
+    <div class="ch"><span>🏷️</span><h2>CLASSES</h2></div>
+    <div class="lgrid" id="lgrid"></div>
+  </div>
+
+</div>
+
+<!-- ═══ CENTER ═══ -->
+<div id="col-mid">
+
+  <div class="card">
+    <div class="ch">
+      <span>🎯</span>
+      <h2>DÉTECTION TEMPS RÉEL</h2>
+      <span id="status-tag" class="tag" style="margin-left:auto;display:none">⏳</span>
+    </div>
+
+    <div class="vwrap" id="vwrap">
+      <!-- Placeholder -->
+      <div id="placeholder">
+        <div class="big">🚗</div>
+        <p>Chargez une vidéo ou image<br>La détection démarre automatiquement</p>
+        <small>Panneaux de vitesse · STOP · Interdit · Feux de circulation</small>
+      </div>
+
+      <!-- Loading overlay -->
+      <div id="loading">
+        <div class="spinner"></div>
+        <div class="load-lbl" id="load-lbl">Envoi du fichier...</div>
+      </div>
+
+      <!-- Media -->
+      <video id="main-video" controls playsinline preload="auto"></video>
+      <img   id="main-img" alt="">
+
+      <!-- Canvas HUD overlay -->
+      <canvas id="canvas"></canvas>
+
+      <div class="vbadge" id="vbadge">🔴 LIVE</div>
+    </div>
+
+    <div id="pbar">
+      <div class="ptrack"><div class="pfill" id="pfill"></div></div>
+      <div class="pinfo"><span id="plbl">Analyse...</span><span id="ppct">0%</span></div>
+    </div>
+  </div>
+
+  <!-- Speed chart -->
+  <div class="card" id="chart-card">
+    <div class="ch"><span>📈</span><h2>VITESSE FRAME-PAR-FRAME</h2></div>
+    <div class="chart-inner"><canvas id="spd-chart"></canvas></div>
+  </div>
+
+</div>
+
+<!-- ═══ RIGHT ═══ -->
+<div id="col-right">
+
+  <div class="card">
+    <div class="ch">
+      <span>🔍</span><h2>DÉTECTIONS ACTIVES</h2>
+      <span id="ndet" style="margin-left:auto;font-family:var(--mono);font-size:.6rem;color:var(--txt3)">0</span>
+    </div>
+    <div id="det-list"><div class="empty">En attente...</div></div>
+  </div>
+
+</div>
+
+</div><!-- layout -->
+
+<script>
+/* ═══════════════════════════════════════════════════════
+   CONSTANTS
+═══════════════════════════════════════════════════════ */
+const CLASS_COLOR = {
+  go:"#00e87a", stop:"#ff1e3c", warning:"#ff8800",
+  "14":"#ff1e3c","15":"#ff3355","17":"#ff3355",
+  "9":"#ff6600","10":"#ff6600","16":"#ff6600","26":"#ffd600",
+};
+const SPEED_COLOR = "#00d4ff";
+const ALERT_COLOR = { critical:"#ff1e3c", warning:"#ff8800", safe:"#00e87a", info:"#00d4ff" };
+
+/* ═══════════════════════════════════════════════════════
+   STATE
+═══════════════════════════════════════════════════════ */
+let curFile = null, jobId = null;
+let vfps = 30, vtotal = 0, vw = 0, vh = 0;
+let sse = null, raf = null;
+let buf = new Map();       // frame → data
+let latestFrameData = null;
+let spdHist = [];
+let maxSpd = 0, sumSpd = 0, nSpd = 0;
+let done = false;
+
+/* ═══════════════════════════════════════════════════════
+   CLOCK + LEGEND
+═══════════════════════════════════════════════════════ */
+setInterval(()=>{ document.getElementById('clock').textContent = new Date().toLocaleTimeString('fr-FR'); }, 1000);
+
+(function buildLegend(){
+  const items = [
+    ["#00e87a","Feu Vert"],    ["#ff1e3c","Feu Rouge"],  ["#ff8800","Feu Orange"],
+    ["#ff1e3c","STOP"],        ["#ff3355","Sens interdit"],["#ff3355","Entrée interdite"],
+    ["#ff6600","Dép. interdit"],["#ff6600","Camion dép."],["#ff6600","Camion interdit"],
+    ["#ffd600","Feux signal."],
+    ["#00d4ff","20 km/h"],["#00d4ff","30 km/h"],["#00d4ff","50 km/h"],["#00d4ff","60 km/h"],
+    ["#00d4ff","70 km/h"],["#00d4ff","80 km/h"],["#00d4ff","100 km/h"],["#00d4ff","120 km/h"],
+  ];
+  const g = document.getElementById('lgrid');
+  items.forEach(([c,l])=>{
+    const d = document.createElement('div'); d.className = 'litem';
+    d.innerHTML = `<span class="ldot" style="background:${c}"></span><span>${l}</span>`;
+    g.appendChild(d);
+  });
+})();
+
+/* ═══════════════════════════════════════════════════════
+   FILE INPUT
+═══════════════════════════════════════════════════════ */
+const drop  = document.getElementById('drop');
+const fi    = document.getElementById('finput');
+drop.addEventListener('dragover', e=>{ e.preventDefault(); drop.classList.add('drag'); });
+drop.addEventListener('dragleave', ()=> drop.classList.remove('drag'));
+drop.addEventListener('drop', e=>{ e.preventDefault(); drop.classList.remove('drag'); if(e.dataTransfer.files[0]) pick(e.dataTransfer.files[0]); });
+fi.addEventListener('change', ()=>{ if(fi.files[0]) pick(fi.files[0]); });
+
+function pick(f){
+  curFile = f;
+  document.getElementById('fname').textContent = f.name;
+  document.getElementById('fmeta').textContent = (f.size/1048576).toFixed(1)+' MB';
+  document.getElementById('finfo').style.display = 'block';
+  document.getElementById('abtn').disabled = false;
+  document.getElementById('dico').textContent = '✅';
+  // Aperçu immédiat local
+  const url = URL.createObjectURL(f);
+  const vid = document.getElementById('main-video');
+  const img = document.getElementById('main-img');
+  document.getElementById('placeholder').style.display = 'none';
+  if(f.type.startsWith('video/')){
+    vid.src = url; vid.style.display = 'block'; img.style.display = 'none';
+  } else {
+    img.src = url; img.style.display = 'block'; vid.style.display = 'none';
+  }
+}
+
+function sl(el, id, suf){
+  document.getElementById(id).textContent = el.value + suf;
+  el.style.setProperty('--pct', (el.value-5)/(95-5)*100+'%');
+}
+function slSkip(el){
+  document.getElementById('skipval').textContent = el.value;
+  el.style.setProperty('--pct', (el.value-1)/3*100+'%');
+}
+document.getElementById('conf').style.setProperty('--pct','20%');
+document.getElementById('skip').style.setProperty('--pct','0%');
+
+/* ═══════════════════════════════════════════════════════
+   ANALYZE — Upload + Start simultaneously
+═══════════════════════════════════════════════════════ */
+async function analyze(){
+  if(!curFile) return;
+  resetLive();
+
+  const btn = document.getElementById('abtn');
+  btn.disabled = true; btn.innerHTML = '<span>⏳</span> Envoi...';
+  document.getElementById('loading').style.display = 'flex';
+  document.getElementById('load-lbl').textContent = 'Envoi du fichier...';
+
+  const fd = new FormData();
+  fd.append('file', curFile);
+  fd.append('confidence', (document.getElementById('conf').value/100).toFixed(2));
+
+  try {
+    const r    = await fetch('/upload', { method:'POST', body:fd });
+    const meta = await r.json();
+    document.getElementById('loading').style.display = 'none';
+
+    if(!meta.ok){ alert('Erreur : '+(meta.error||'inconnue')); btn.disabled=false; btn.innerHTML='<span>▶</span> Analyser'; return; }
+
+    document.getElementById('rbtn').style.display = 'block';
+    document.getElementById('stats-card').style.display = 'block';
+
+    if(meta.type === 'video'){
+      startVideo(meta);
+    } else {
+      showImageResult(meta);
+    }
+  } catch(e){
+    document.getElementById('loading').style.display = 'none';
+    btn.disabled = false; btn.innerHTML = '<span>▶</span> Analyser';
+    alert('Erreur réseau : ' + e.message);
+  }
+}
+
+/* ═══════════════════════════════════════════════════════
+   IMAGE RESULT
+═══════════════════════════════════════════════════════ */
+function showImageResult(meta){
+  vw = meta.iw||640; vh = meta.ih||480;
+  document.getElementById('status-tag').style.display = 'inline-flex';
+  document.getElementById('status-tag').textContent = '✅ Analysé';
+  document.getElementById('abtn').disabled = false;
+  document.getElementById('abtn').innerHTML = '<span>▶</span> Analyser';
+
+  updateStats(meta.dets||[], meta.speed||0, meta.dist, meta.adas, meta.msg, meta.limit, 0);
+
+  // Dessiner les bboxes sur l'image
+  const img = document.getElementById('main-img');
+  const drawOnLoad = ()=>{
+    const canvas = document.getElementById('canvas');
+    const ctx    = canvas.getContext('2d');
+    const rect   = img.getBoundingClientRect();
+    canvas.width  = img.naturalWidth  || rect.width;
+    canvas.height = img.naturalHeight || rect.height;
+    canvas.style.width  = rect.width  + 'px';
+    canvas.style.height = rect.height + 'px';
+    drawFrame(ctx, {dets:meta.dets||[],speed:0,dist:meta.dist,adas:meta.adas,msg:meta.msg,limit:meta.limit,frame:0}, canvas.width, canvas.height);
+  };
+  if(img.complete && img.naturalWidth) drawOnLoad();
+  else img.addEventListener('load', drawOnLoad, {once:true});
+
+}
+
+/* ═══════════════════════════════════════════════════════
+   VIDEO — START
+   Workflow :
+   1. Vidéo se charge depuis /static/uploads/ → joue immédiatement
+   2. SSE démarre en même temps
+   3. Canvas se synchronise sur currentTime
+═══════════════════════════════════════════════════════ */
+function startVideo(meta){
+  jobId  = meta.job_id;
+  vfps   = meta.fps;
+  vtotal = meta.frames;
+  vw     = meta.w;
+  vh     = meta.h;
+  done   = false;
+
+  // ── 1. Charger et jouer la vidéo depuis le serveur ────────
+  const vid = document.getElementById('main-video');
+  vid.src   = meta.url;      // vidéo servie directement
+  vid.style.display = 'block';
+  document.getElementById('main-img').style.display = 'none';
+
+  // Jouer dès que possible (pas d'attente de l'analyse)
+  vid.addEventListener('canplay', ()=>{ vid.play().catch(()=>{}); }, { once:true });
+
+  // UI
+  document.getElementById('pbar').style.display   = 'block';
+  document.getElementById('vbadge').style.display = 'block';
+  document.getElementById('status-tag').style.display = 'inline-flex';
+  document.getElementById('status-tag').textContent = '⏳ Analyse...';
+
+  // ── 2. Démarrer l'analyse SSE en parallèle ────────────────
+  const conf = document.getElementById('conf').value / 100;
+  const skip = document.getElementById('skip').value;
+  sse = new EventSource(`/stream/${jobId}?conf=${conf}&skip=${skip}`);
+  sse.onmessage = onSSE;
+  sse.onerror   = ()=>{ if(!done){ console.warn('[SSE] Connection perdue'); } sse.close(); };
+
+  // ── 3. Canvas loop synchronisé ────────────────────────────
+  initChart();
+  startCanvasLoop();
+}
+
+/* ═══════════════════════════════════════════════════════
+   SSE EVENTS
+═══════════════════════════════════════════════════════ */
+function onSSE(e){
+  const d = JSON.parse(e.data);
+
+  if(d.type === 'meta'){ vw = d.w; vh = d.h; return; }
+
+  if(d.type === 'done'){
+    done = true; sse.close();
+    document.getElementById('status-tag').textContent = '✅ Terminé';
+    document.getElementById('vbadge').textContent     = '✅ Analysé';
+    document.getElementById('pfill').style.width      = '100%';
+    document.getElementById('ppct').textContent       = '100%';
+    document.getElementById('plbl').textContent       = `${d.frames} frames`;
+    document.getElementById('abtn').disabled = false;
+    document.getElementById('abtn').innerHTML = '<span>▶</span> Analyser';
+    return;
+  }
+
+  if(d.type === 'frame'){
+    buf.set(d.frame, d);
+
+    // Progress
+    document.getElementById('pfill').style.width  = d.pct + '%';
+    document.getElementById('ppct').textContent   = d.pct.toFixed(1) + '%';
+    document.getElementById('plbl').textContent   = `Frame ${d.frame}`;
+
+    // Speed chart
+    if(d.speed > 0){
+      sumSpd += d.speed; nSpd++;
+      if(d.speed > maxSpd) maxSpd = d.speed;
+      if(d.frame % 8 === 0) pushChart(d.frame, d.speed);
+    }
+
+    latestFrameData = d;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════
+   CANVAS LOOP — synchronisé avec video.currentTime
+═══════════════════════════════════════════════════════ */
+function startCanvasLoop(){
+  const canvas = document.getElementById('canvas');
+  const ctx    = canvas.getContext('2d');
+  const vid    = document.getElementById('main-video');
+
+  function loop(){
+    const rect = vid.getBoundingClientRect();
+    if(rect.width > 0){
+      canvas.width  = vid.videoWidth  || rect.width;
+      canvas.height = vid.videoHeight || rect.height;
+      canvas.style.width  = rect.width  + 'px';
+      canvas.style.height = rect.height + 'px';
+    }
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    if(!vid.paused && !vid.ended && canvas.width > 0){
+      const cf = Math.round(vid.currentTime * vfps);
+      // Chercher la donnée la plus proche
+      let data = buf.get(cf);
+      if(!data){
+        for(let f = cf-1; f >= Math.max(0, cf-12); f--){
+          if(buf.has(f)){ data = buf.get(f); break; }
+        }
+      }
+      if(!data && latestFrameData){
+        data = latestFrameData;
+      }
+      if(data){
+        drawFrame(ctx, data, canvas.width, canvas.height);
+        updateStats(data.dets||[], data.speed, data.dist, data.adas, data.msg, data.limit, data.frame);
+      }
+    }
+    raf = requestAnimationFrame(loop);
+  }
+  loop();
+}
+
+/* ═══════════════════════════════════════════════════════
+   DRAW FRAME — bounding boxes + HUD
+═══════════════════════════════════════════════════════ */
+function drawFrame(ctx, data, W, H){
+  const { dets=[], speed=0, dist, adas='ok', msg='', frame=0, limit } = data;
+
+  // Facteur de scale (bbox en coords vidéo → coords canvas)
+  const sx = W / (vw || W);
+  const sy = H / (vh || H);
+
+  /* ── Bounding Boxes ──────────────────────────────────────── */
+  dets.forEach(det => {
+    if(!det.bbox) return;
+    const [x1,y1,x2,y2] = det.bbox;
+    const rx1 = x1*sx, ry1 = y1*sy;
+    const rx2 = x2*sx, ry2 = y2*sy;
+    const bw = rx2-rx1, bh = ry2-ry1;
+    const col = det.color || (CLASS_COLOR[det.raw] || SPEED_COLOR);
+
+    // Glow
+    ctx.shadowColor = col; ctx.shadowBlur = 10;
+
+    // Rectangle
+    ctx.strokeStyle = col; ctx.lineWidth = 2.5;
+    ctx.strokeRect(rx1, ry1, bw, bh);
+    ctx.shadowBlur = 0;
+
+    // Coins en L
+    const cLen = Math.min(bw*0.22, bh*0.22, 16);
+    ctx.lineWidth = 3.5;
+    [[rx1,ry1,1,1],[rx2,ry1,-1,1],[rx2,ry2,-1,-1],[rx1,ry2,1,-1]].forEach(([cx,cy,dx,dy])=>{
+      ctx.beginPath(); ctx.moveTo(cx+dx*cLen,cy); ctx.lineTo(cx,cy); ctx.lineTo(cx,cy+dy*cLen); ctx.stroke();
+    });
+
+    // Label
+    const fs = Math.max(11, Math.min(14, bw * 0.11));
+    ctx.font = `bold ${fs}px Inter,sans-serif`;
+    const txt = `${det.icon||''} ${det.label_fr}  ${det.confidence.toFixed(0)}%`;
+    const tw  = ctx.measureText(txt).width;
+    const lx  = rx1, ly = Math.max(ry1 - 4, fs + 4);
+    const pad = 5;
+    ctx.fillStyle = 'rgba(0,0,0,.82)';
+    ctx.beginPath();
+    if(ctx.roundRect) ctx.roundRect(lx, ly-fs-pad, tw+pad*2, fs+pad*2, 4);
+    else ctx.rect(lx, ly-fs-pad, tw+pad*2, fs+pad*2);
+    ctx.fill();
+    ctx.fillStyle = col;
+    ctx.fillText(txt, lx+pad, ly);
+
+    // Fill semi-transparent
+    ctx.fillStyle = hexAlpha(col, 0.06);
+    ctx.fillRect(rx1, ry1, bw, bh);
+  });
+
+  /* ── HUD Panel gauche ─────────────────────────────────────── */
+  const PW = Math.min(190, W * 0.27);
+  ctx.fillStyle = 'rgba(7,9,15,.80)';
+  ctx.fillRect(0, 0, PW, H);
+  // Ligne cyan
+  const g = ctx.createLinearGradient(0,0,PW,0);
+  g.addColorStop(0,'#00d4ff'); g.addColorStop(1,'rgba(0,212,255,0)');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, PW, 2);
+
+  // ADAS label
+  ctx.font = `bold ${Math.max(12,PW*0.068)}px Rajdhani,sans-serif`;
+  ctx.fillStyle = '#00d4ff'; ctx.fillText('ADAS', 10, 24);
+  ctx.font = `${Math.max(7,PW*0.038)}px Inter,sans-serif`;
+  ctx.fillStyle = '#2e4060'; ctx.fillText('DÉTECTION v3', 10, 34);
+
+  // Vitesse
+  const spd = Math.round(speed||0);
+  const sc  = spd<60?'#00e87a':spd<90?'#ff8800':'#ff1e3c';
+  const ss  = Math.max(28, PW*0.25);
+  ctx.font = `bold ${ss}px Rajdhani,sans-serif`;
+  ctx.fillStyle = sc;
+  ctx.fillText(spd, 10, 46 + ss*0.8);
+  const uy = 46 + ss*0.8 + 2;
+  ctx.font = `${Math.max(8,PW*0.048)}px Inter,sans-serif`;
+  ctx.fillStyle = '#6a80a0'; ctx.fillText('km/h', 10, uy+12);
+
+  // Séparateur
+  let ty = uy + 24;
+  ctx.strokeStyle = '#1a2840'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(8,ty); ctx.lineTo(PW-8,ty); ctx.stroke(); ty += 12;
+
+  // Nb détections
+  ctx.font = `${Math.max(8,PW*0.048)}px Inter,sans-serif`;
+  ctx.fillStyle = '#6a80a0';
+  ctx.fillText(`${dets.length} objet${dets.length>1?'s':''} détecté${dets.length>1?'s':''}`, 8, ty); ty += 14;
+
+  // Top 3 détections
+  dets.slice(0,3).forEach(d=>{
+    if(ty > H-50) return;
+    const col = d.color || CLASS_COLOR[d.raw] || SPEED_COLOR;
+    ctx.font = `600 ${Math.max(8,PW*0.052)}px Inter,sans-serif`;
+    ctx.fillStyle = col;
+    ctx.fillText((d.icon||'') + '  ' + (d.label_fr||d.raw).substring(0,18), 8, ty); ty += 13;
+    ctx.font = `${Math.max(7,PW*0.04)}px JetBrains Mono,monospace`;
+    ctx.fillStyle = '#2e4060';
+    ctx.fillText(`   ${d.confidence.toFixed(1)}%`, 8, ty); ty += 12;
+  });
+
+  if(dist){ ty += 2;
+    ctx.font = `${Math.max(7,PW*0.04)}px Inter,sans-serif`;
+    ctx.fillStyle = '#6a80a0'; ctx.fillText(`⬡ Dist: ${dist.toFixed(1)}m`, 8, ty); ty += 13;
+  }
+  if(limit){
+    ctx.font = `${Math.max(7,PW*0.04)}px Inter,sans-serif`;
+    ctx.fillStyle = '#6a80a0'; ctx.fillText(`⬡ Limite: ${limit} km/h`, 8, ty);
+  }
+
+  // Frame counter
+  ctx.font = `${Math.max(7,PW*0.036)}px JetBrains Mono,monospace`;
+  ctx.fillStyle = '#1a2840'; ctx.fillText(`#${frame}`, 8, H-8);
+
+  /* ── Alerte ──────────────────────────────────────────────── */
+  if(adas !== 'ok' && msg){
+    const ac = adas==='danger'?'#ff1e3c':adas==='overspeed'?'#ff4400':'#ffd600';
+    const fs2 = Math.max(12, W*0.019);
+    ctx.font = `bold ${fs2}px Inter,sans-serif`;
+    const tw = ctx.measureText(msg).width;
+    const mx = PW + (W-PW-tw)/2;
+    ctx.fillStyle = 'rgba(0,0,0,.82)';
+    if(ctx.roundRect) ctx.roundRect(mx-12, 7, tw+24, 30, 4);
+    else ctx.rect(mx-12, 7, tw+24, 30);
+    ctx.fill();
+    ctx.fillStyle = ac; ctx.fillText(msg, mx, 28);
+    // Bordure
+    ctx.strokeStyle = adas==='danger'?'rgba(255,30,60,.8)':'rgba(255,68,0,.7)';
+    ctx.lineWidth   = 5;
+    ctx.strokeRect(3, 3, W-6, H-6);
+  }
+}
+
+function hexAlpha(hex, a){
+  const r=parseInt(hex.slice(1,3),16),g=parseInt(hex.slice(3,5),16),b=parseInt(hex.slice(5,7),16);
+  return `rgba(${r},${g},${b},${a})`;
+}
+
+/* ═══════════════════════════════════════════════════════
+   UPDATE SIDE STATS
+═══════════════════════════════════════════════════════ */
+function updateStats(dets, speed, dist, adas, msg, limit, frame){
+  const spd = (speed === null || speed === undefined) ? null : Math.round(speed);
+  const sv  = document.getElementById('sv-spd');
+  sv.textContent = spd === null ? '—' : spd;
+  sv.className   = 'sval ' + (spd === null ? 'g' : (spd<60?'g':spd<90?'o':'r'));
+  document.getElementById('sv-dist').textContent = dist ? dist.toFixed(1)+'m' : '—';
+  document.getElementById('sv-lim').textContent  = limit ? limit+' km/h' : '—';
+  document.getElementById('sv-n').textContent    = dets.length;
+
+  // Detection cards
+  const el = document.getElementById('det-list');
+  document.getElementById('ndet').textContent = dets.length;
+  if(!dets.length){
+    el.innerHTML = '<div class="empty">Aucune détection</div>';
+  } else {
+    el.innerHTML = dets.map(d=>{
+      const col = d.color || CLASS_COLOR[d.raw] || SPEED_COLOR;
+      return `<div class="dcard ${d.alert||'info'}">
+        <div class="d-ico">${d.icon||'📍'}</div>
+        <div class="d-body">
+          <div class="d-lbl">${d.label_fr||d.raw}</div>
+          <div class="d-conf">${d.confidence.toFixed(1)}% confiance</div>
+        </div>
+        <span class="d-pct p-${d.alert||'info'}" style="border-left:3px solid ${col}">${d.confidence.toFixed(0)}%</span>
+      </div>`;
+    }).join('');
+  }
+
+  // ADAS strip
+  const strip = document.getElementById('astrip');
+  strip.style.display = 'block';
+  strip.className     = `astrip s-${adas||'ok'}`;
+  document.getElementById('amsg').textContent = msg || '✅ Voie libre';
+}
+
+/* ═══════════════════════════════════════════════════════
+   SPEED CHART
+═══════════════════════════════════════════════════════ */
+let chartCtx = null;
+function initChart(){ chartCtx = document.getElementById('spd-chart').getContext('2d'); spdHist = []; }
+function pushChart(f, v){ spdHist.push({x:f,y:v}); if(spdHist.length>110) spdHist.shift(); drawChart(); }
+function drawChart(){
+  if(!chartCtx) return;
+  const c = chartCtx.canvas; const W = c.offsetWidth; const H = 70;
+  c.width = W; c.height = H; const ctx = chartCtx;
+  ctx.clearRect(0,0,W,H);
+  if(spdHist.length < 2) return;
+  const mv = Math.max(30,...spdHist.map(p=>p.y));
+  ctx.strokeStyle='rgba(26,40,64,.8)'; ctx.lineWidth=1;
+  [0,.5,1].forEach(p=>{ const y=H-p*(H-8)-4; ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W,y); ctx.stroke(); });
+  ctx.beginPath();
+  spdHist.forEach((p,i)=>{ const x=i/(spdHist.length-1)*W; const y=H-((p.y/mv)*(H-8))-4; i===0?ctx.moveTo(x,y):ctx.lineTo(x,y); });
+  ctx.strokeStyle='#00e87a'; ctx.lineWidth=2; ctx.stroke();
+  const g=ctx.createLinearGradient(0,0,0,H);
+  g.addColorStop(0,'rgba(0,232,122,.35)'); g.addColorStop(1,'rgba(0,232,122,0)');
+  ctx.lineTo(W,H); ctx.lineTo(0,H); ctx.closePath(); ctx.fillStyle=g; ctx.fill();
+  ctx.font='bold 10px JetBrains Mono,monospace'; ctx.fillStyle='#00e87a';
+  ctx.fillText(spdHist[spdHist.length-1].y.toFixed(1)+' km/h', W-68, 13);
+}
+
+/* ═══════════════════════════════════════════════════════
+   RESET
+═══════════════════════════════════════════════════════ */
+function resetLive(){
+  if(sse){ sse.close(); sse=null; }
+  if(raf){ cancelAnimationFrame(raf); raf=null; }
+  buf.clear(); latestFrameData = null; spdHist=[];
+  maxSpd=0; sumSpd=0; nSpd=0; done=false;
+  document.getElementById('det-list').innerHTML = '<div class="empty">En attente...</div>';
+  document.getElementById('ndet').textContent  = '0';
+  document.getElementById('pfill').style.width = '0%';
+  document.getElementById('ppct').textContent  = '0%';
+  const cv = document.getElementById('canvas');
+  cv.getContext('2d').clearRect(0,0,cv.width,cv.height);
+}
+
+function resetAll(){
+  resetLive(); curFile = null; jobId = null;
+  const vid = document.getElementById('main-video');
+  vid.src = ''; vid.style.display = 'none';
+  const img = document.getElementById('main-img');
+  img.src = ''; img.style.display = 'none';
+  document.getElementById('placeholder').style.display  = 'flex';
+  document.getElementById('vbadge').style.display       = 'none';
+  document.getElementById('pbar').style.display         = 'none';
+  document.getElementById('chart-card').style.display   = 'none';
+  document.getElementById('stats-card').style.display   = 'none';
+  document.getElementById('status-tag').style.display   = 'none';
+  document.getElementById('finfo').style.display        = 'none';
+  document.getElementById('dico').textContent           = '🎬';
+  document.getElementById('rbtn').style.display         = 'none';
+  document.getElementById('abtn').disabled = true;
+  document.getElementById('abtn').innerHTML = '<span>▶</span> Analyser';
+  fi.value = '';
+}
+</script>
+</body>
+</html>
