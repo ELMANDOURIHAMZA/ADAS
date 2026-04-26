@@ -1,18 +1,20 @@
 """
-ADAS Final — app.py
-====================
-- Upload → lecture vidéo IMMÉDIATE
-- Analyse SSE démarre automatiquement dès que la vidéo joue
-- Mapping classes corrigé
+ADAS Fixed — app.py
+=====================
+Corrections apportées :
+  1. SpeedEstimator activé dans /stream (vitesse frame-par-frame réelle)
+  2. Throttling SSE : sleep entre frames pour ne pas saturer le client
+  3. Tracking simple par classe pour SpeedEstimator (un estimateur par panneau actif)
+  4. feu_rouge mappé sur "red_light" (séparé du panneau STOP panneau)
 """
 
-import os, cv2, uuid, json
+import os, cv2, uuid, json, time
 import numpy as np
 from flask import Flask, render_template, request, jsonify, Response, send_from_directory
 from werkzeug.utils import secure_filename
 
 from modules.detector import (
-    SignDetector, AlertEngine,
+    SignDetector, AlertEngine, SpeedEstimator,
     CLASS_FR, CLASS_ICON, ALERT_MSG, ALERT_LEVEL, SPEED_LIMITS,
 )
 
@@ -32,7 +34,7 @@ app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 600 * 1024 * 1024
 
 print("\n" + "="*55)
-print("  ADAS Final — Chargement du modèle...")
+print("  ADAS Fixed — Chargement du modèle...")
 print("="*55)
 default_conf = 0.25
 if os.path.exists(PROFILE_PATH):
@@ -49,7 +51,7 @@ detector = SignDetector(MODEL_PATH, conf=default_conf)
 print("  ✓ Prêt sur http://localhost:5000\n")
 
 
-# ── helpers ──────────────────────────────────────────────────
+# ── helpers ──────────────────────────────────────────────────────────────────
 def ext(fn):
     return fn.rsplit(".", 1)[-1].lower() if "." in fn else ""
 
@@ -75,7 +77,7 @@ def serialize(dets):
     } for d in dets]
 
 
-# ── routes ───────────────────────────────────────────────────
+# ── routes ────────────────────────────────────────────────────────────────────
 @app.route("/")
 def index():
     return render_template("index.html")
@@ -114,15 +116,14 @@ def upload():
             return jsonify({"error": "Image illisible"}), 400
         small, sx, sy = resize(img)
         dets = detector.detect(small, conf=conf)
-        # Remettre à l'échelle vers la résolution originale
         for d in dets:
             x1,y1,x2,y2 = d["bbox"]
             d["bbox"] = [round(x1*sx), round(y1*sy), round(x2*sx), round(y2*sy)]
         top = dets[0] if dets else None
         ae  = AlertEngine()
-        if top: ae.update_limit(top["raw"])
-        # Vitesse absolue desactivee: sans calibration camera, la valeur km/h est trompeuse.
-        adas  = ae.evaluate(0.0, top["raw"] if top else None)
+        if top:
+            ae.update_limit(top["raw"])
+        adas = ae.evaluate(0.0, top["raw"] if top else None)
         return jsonify({
             "ok": True, "type": "image", "job_id": job_id,
             "url": f"/static/uploads/{job_id}.{e}",
@@ -141,8 +142,11 @@ def upload():
 @app.route("/stream/<job_id>")
 def stream(job_id):
     """
-    SSE — traite chaque frame et envoie le résultat immédiatement.
-    Le frontend joue la vidéo en parallèle et synchronise via currentTime.
+    SSE — traite chaque frame et envoie le résultat.
+    CORRECTIONS :
+      - SpeedEstimator activé (vitesse réelle frame/frame)
+      - Throttling : on cède le temps pour ne pas inonder le client
+        (on envoie les frames à ~2× la vitesse réelle max)
     """
     path = None
     for e in VIDEO_EXT:
@@ -163,73 +167,108 @@ def stream(job_id):
         h0   = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
         # Facteur resize
-        s    = min(MAX_DIM/w0, MAX_DIM/h0, 1.0)
-        pw   = int(w0*s); ph = int(h0*s)
-        sx   = w0/pw if pw else 1.0
-        sy   = h0/ph if ph else 1.0
+        s  = min(MAX_DIM/w0, MAX_DIM/h0, 1.0)
+        pw = int(w0*s); ph = int(h0*s)
+        sx = w0/pw if pw else 1.0
+        sy = h0/ph if ph else 1.0
 
         ae   = AlertEngine()
-        dt   = 1.0 / fps
+        # ── CORRECTION 2 : un SpeedEstimator par classe détectée ─────────────
+        speed_trackers = {}   # raw_class → SpeedEstimator
+
+        dt_frame = 1.0 / fps          # durée d'une frame en secondes
+        # Throttle : on attend au minimum dt_frame/2 entre deux envois SSE
+        # (permet un traitement 2× plus vite que temps réel, sans saturer)
+        min_interval = dt_frame / 2.0
+
         fi   = 0
         last = None
+        t_start = time.monotonic()
 
         yield f"data:{json.dumps({'type':'meta','fps':fps,'total':tot,'w':w0,'h':h0})}\n\n"
 
         while True:
             ok, frame = cap.read()
-            if not ok: break
+            if not ok:
+                break
+
+            timestamp = fi * dt_frame   # temps vidéo en secondes
 
             # Frames skippées → répéter dernier résultat
             if skip > 1 and fi % skip != 0 and last:
-                d = dict(last); d["frame"] = fi; d["t"] = round(fi*dt,3)
+                d = dict(last); d["frame"] = fi; d["t"] = round(timestamp, 3)
                 yield f"data:{json.dumps(d)}\n\n"
-                fi += 1; continue
+                fi += 1
+                continue
 
             # Resize
-            small = cv2.resize(frame,(pw,ph),cv2.INTER_AREA) if s<1.0 else frame
+            small = cv2.resize(frame, (pw, ph), cv2.INTER_AREA) if s < 1.0 else frame
 
-            # ── DÉTECTION ────────────────────────────────────
+            # ── DÉTECTION ────────────────────────────────────────────────────
             dets = detector.detect(small, conf=conf)
 
             # Recalibrer bbox → résolution originale
             for d in dets:
                 x1,y1,x2,y2 = d["bbox"]
-                d["bbox"] = [round(x1*sx),round(y1*sy),round(x2*sx),round(y2*sy)]
-                d["bbox_w_px"] = (d["bbox"][2]-d["bbox"][0])
+                d["bbox"]      = [round(x1*sx), round(y1*sy), round(x2*sx), round(y2*sy)]
+                d["bbox_w_px"] = d["bbox"][2] - d["bbox"][0]
 
             top = dets[0] if dets else None
-            if top: ae.update_limit(top["raw"])
+            if top:
+                ae.update_limit(top["raw"])
 
-            # ── VITESSE ──────────────────────────────────────
-            # Vitesse absolue desactivee tant que la calibration reelle n'est pas implementee.
-            spd = None
-            dist= None
+            # ── CORRECTION 1 : VITESSE RÉELLE ────────────────────────────────
+            # On utilise le panneau le plus confiant (top) pour estimer la vitesse.
+            # Un SpeedEstimator indépendant par classe évite les sauts lors du
+            # changement de panneau visible.
+            spd  = None
+            dist = None
+            if top and top["bbox_w_px"] > 5:
+                raw_key = top["raw"]
+                if raw_key not in speed_trackers:
+                    speed_trackers[raw_key] = SpeedEstimator()
+                se_result = speed_trackers[raw_key].update(top["bbox_w_px"], timestamp)
+                dist = se_result["distance_m"]
+                spd  = se_result["speed_smooth"] if se_result["speed_smooth"] > 0 else None
 
-            # ── ALERTE ───────────────────────────────────────
-            adas = ae.evaluate(0.0, top["raw"] if top else None)
+            # ── ALERTE ───────────────────────────────────────────────────────
+            adas = ae.evaluate(spd or 0.0, top["raw"] if top else None)
 
             data = {
                 "type":  "frame",
                 "frame": fi,
-                "t":     round(fi*dt, 3),
+                "t":     round(timestamp, 3),
                 "dets":  serialize(dets),
                 "speed": spd,
                 "dist":  dist,
                 "adas":  adas["state"],
                 "msg":   adas["msg"],
                 "limit": ae.current_limit,
-                "pct":   round(fi/tot*100, 1),
+                "pct":   round(fi / tot * 100, 1),
             }
             last = data
             yield f"data:{json.dumps(data)}\n\n"
             fi += 1
 
+            # ── CORRECTION 3 : THROTTLE ───────────────────────────────────────
+            # Calcule le temps théorique de cette frame dans la vidéo réelle,
+            # puis attend si on avance trop vite (évite de saturer le buffer JS).
+            wall_elapsed   = time.monotonic() - t_start
+            video_expected = timestamp          # temps vidéo de cette frame
+            advance        = wall_elapsed - video_expected
+            # Si on est plus de 1 seconde en avance sur la vidéo → on attend
+            if advance < -min_interval:
+                time.sleep(min(-advance - min_interval, 0.5))
+
         cap.release()
         yield f"data:{json.dumps({'type':'done','frames':fi})}\n\n"
 
     return Response(generate(), mimetype="text/event-stream",
-        headers={"Cache-Control":"no-cache,no-transform",
-                 "X-Accel-Buffering":"no","Connection":"keep-alive"})
+        headers={
+            "Cache-Control":    "no-cache,no-transform",
+            "X-Accel-Buffering":"no",
+            "Connection":       "keep-alive",
+        })
 
 
 @app.route("/static/uploads/<path:fn>")
